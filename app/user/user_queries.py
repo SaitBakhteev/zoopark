@@ -1,24 +1,15 @@
 import logging
 
-from datetime import datetime, timedelta
-import datetime as dt
-
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 
-from app.calendar import NewCalendar
-
-from aiogram_calendar import SimpleCalendarCallback
-
 from app.database import requests as db_req
 
-import app.user.keyboards as kb
-import app.states as st
 from app.administrator.keyboards import admin_panel
-
-from config import TYPE_CHOICES
+import app.pagination as pag
+import app.user.keyboards as kb_user
 
 logger = logging.getLogger(__name__)
 
@@ -29,22 +20,106 @@ user = Router()
 @user.message(CommandStart())
 async def start(message: Message):
     if user := await db_req.get_user(message.from_user.id):
-        text = 'Вы повторно хотите пройти викторину'
+        text = ('Рады приветствовать  в нашем чат-боте 😊. '
+                'Здесь можете:\n'
+                '1. Ознакомиться с информацией о Московском зоопарке.\n'
+                '2. Справочной информацией по пользованию ботом.\n'                
+                '3. И конечно пройти увлекательный опрос-викторина')
         if user.admin_permissions:
-
             '''Если пользователь обладает правами админа,
              появляется панель кнопок внизу за пределами окна переписки'''
             await message.answer(text, reply_markup=admin_panel)
-
         else:
-            await message.answer(text)
+            await message.answer(text, reply_markup=await kb_user.me_admin_keyboard())
+        message.reply_markup = kb_user.me_admin_keyboard()
     else:
         await db_req.create_user(message.from_user)
-        await message.answer('Добро пожаловать в наш чат-бот!😊\n'
-                             'Ты здесь, потому что любишь животных.\n'
-                             'Ну что ж начнем нашу увлкательную викторину 😁 Поехали!')
+        await message.answer(
+            'Добро пожаловать в чат-бот Московского зоопарка!😊\n'
+            'Ты здесь, потому что любишь животных.\n'
+            'Здесь тебя ждёт увлекательная викторина, которое определит'
+            'твоё тотемное животное 😁.\n'
+            'Но сначала нужно зарегистрироваться. Ну что ж, поехали 🤩',
+            reply_markup=await kb_user.registration_keyboard_on_start()
+        )
 
+
+''' ВИКТОРИНА '''
+@user.message(Command('quiz'))
+async def start_quiz(message: Message, state: FSMContext):
+    await state.clear()
+    initDB_question_list = await db_req.create_question_list_for_quiz()
+
+    # Формирование словарей для ведения статистики викторины
+    animal_set = {i['animal'] for i in initDB_question_list}
+    category_set = {i['category__title'] for i in initDB_question_list}
+    result_list_by_animals = [{'animal': i, 'correct_answer_count': 0}
+                              for i in animal_set]
+    result_list_by_categories = [{'category': i, 'correct_answer_count': 0}
+                                 for i in category_set]
+
+    # Новый список под формат пагинации object_list для quiz
+    quiz_list = [{'quiz_id': i['id'],
+                  'quiz_info': i['text']}
+                 for i in initDB_question_list]
+    await state.update_data(question_list=initDB_question_list,
+                            quiz_list=quiz_list,
+                            result_list_by_animals=result_list_by_animals,
+                            result_list_by_categories=result_list_by_categories,
+                            current_index=0,
+                            total_count=len(initDB_question_list),
+                            user_tg_id=message.from_user.id)
+    try:
+        object_info = quiz_list[0]['quiz_info']
+        await pag.show_object(
+            message=message, object_info=object_info,
+            current_index=0, total_count=len(quiz_list),
+            prefix='quiz',
+            image_path=initDB_question_list[0]['image_path'],
+            answers_list=initDB_question_list[0]['answers']
+        )
+    except Exception as e:
+        logger.error(f'ERROR= {e}')
+
+@user.callback_query(F.data.startswith('quiz'))
+async def quiz_pagination(callback_query: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    current_index, total_count = data.get('current_index'), data.get('total_count') - 1
+    question_list, result_list_by_animals, result_list_by_categories = (
+        data.get('question_list'), data.get('result_list_by_animals'),
+        data.get('result_list_by_categories')
+    )
+    animal, category = (question_list[current_index]['animal'],
+                        question_list[current_index]['category__title'])
+
+    logger.info(f'current_index={current_index}; total_count={total_count}')
+
+    if callback_query.data.split('_')[1] == 'True':
+        # При верном ответе баллы по соответствующему животному и категории увеличиваются на 1
+        next(item for item in result_list_by_animals if item['animal'] == animal)['correct_answer_count'] += 1
+        next(item for item in result_list_by_categories if item['category'] == category)['correct_answer_count'] += 1
+        await callback_query.answer(f'GOOD!!! This is {animal} 🥳🥳🥳')
+    else:
+        await callback_query.answer(f'Ohhh NO😒... This wrong answer')
+
+    if current_index < total_count:
+        await pag.pagination_handler(callback_query, state, prefix='quiz')
+    else:
+        report = ('<b>Викторина завершена</b> 🔥\n'
+                  'Статистика правильных ответов по <u><i>животным</i></u>:\n')
+
+        # Отчет формируется в порядке убывания количества правильных отвтеов в обоих списках
+        sorted_animal_list = sorted(result_list_by_animals, key=lambda x: x['correct_answer_count'], reverse=True)
+        sorted_category_list = sorted(result_list_by_categories, key=lambda x: x['correct_answer_count'], reverse=True)
+        for i, item in enumerate(sorted_animal_list):
+            report += f'{i+1}. <i>{item['animal']}</i>: {item['correct_answer_count']};\n'
+        report += '\nСтатистика правильных ответов по <u><i>категориям</i></u>:\n'
+        for i, item in enumerate(sorted_category_list):
+            report += f'{i+1}. {item['category']}: {item['correct_answer_count']};\n'
+
+        await callback_query.message.answer(report, parse_mode='HTML')
 #
+
 #
 # # ----- RETURN_CALLBACK -----------
 # @user.callback_query(F.data == "return_callback")

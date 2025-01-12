@@ -52,5 +52,8 @@ class CreateQuestionFSM(StatesGroup):
     animal = State()
     text = State()
     answers = State()
-    correct_answers = State()
+    correct_answer = State()
     image = State()
+
+class QuizFSM(StatesGroup):
+    continue_quiz = State()

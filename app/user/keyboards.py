@@ -1,14 +1,19 @@
-from aiogram.types import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
-from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.utils.keyboard import (KeyboardButton,
+                                    ReplyKeyboardMarkup,
+                                    InlineKeyboardBuilder)
 
 from app.database import requests as db_req
 
-from config import TYPE_CHOICES
+
+# Клавиатура для регистрации пользователя при первом входе в бот
+async def registration_keyboard_on_start() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardBuilder()
+    keyboard.button(text='Регистрация', callback_data='registration')
+    return keyboard.as_markup()
+
+async def me_admin_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='Я админ этого бота')]])
 
 
 

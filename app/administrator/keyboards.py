@@ -6,3 +6,6 @@ admin_panel = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='Добавит
                                             [KeyboardButton(text='Добавить категорию'),
                                              KeyboardButton(text='Просмотреть категорию')]],
                                   resize_keyboard=True)
+
+kb_add_question = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text='Добавить вопрос', callback_data='add_question' )]])
